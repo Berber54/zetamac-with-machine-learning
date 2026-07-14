@@ -24,7 +24,12 @@ The only dependency is [CustomTkinter](https://customtkinter.tomschimansky.com/)
 - **Stats** opens the dashboard: per-operation summary cards, a heatmap of
   every number colored by your average solve time (bright = slow, dark = fast,
   grey = not seen yet), and a ranked list of your slowest numbers. Hover a cell
-  for details.
+  for details. The **+ − × ÷** buttons at the bottom of the main screen open
+  the dashboard focused on that operation.
+- Your **highest ever score** is tracked per session length and shown under
+  the answer box (for the currently selected length) and in the stats window.
+  Only timed sessions that run to completion count — stopping early or playing
+  endless never sets a record.
 
 ## Game rules
 
@@ -76,7 +81,8 @@ probability, so the rotation never collapses onto a few items.
 Created next to the script; both are human-readable:
 
 - `zetamac_stats.json` — the per-`(operation, number)` statistics (JSON keys
-  are stringified numbers) plus per-operation totals.
+  are stringified numbers), per-operation totals, and high scores per session
+  length.
 - `zetamac_log.csv` — one row per solved problem:
   `timestamp, operation, left, right, answer, seconds`
   (for division, `left` is the dividend and `right` the divisor).

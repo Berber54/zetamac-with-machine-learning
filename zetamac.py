@@ -32,8 +32,13 @@ Tunable constants (see below):
     WEIGHT_BASELINE additive weight floor — keeps every number/op in rotation
     WEIGHT_EXPONENT exponent > 1 — makes genuinely slow items appear much more
 
+High scores:
+    The best score (problems solved) is kept per session length and shown on
+    the main screen and in the stats window.  Only timed sessions whose timer
+    ran out count — stopping early or playing endless never sets a record.
+
 Files (created next to this script):
-    zetamac_stats.json   per-(operation, number) statistics
+    zetamac_stats.json   per-(operation, number) statistics and high scores
     zetamac_log.csv      one row per solved problem
 Old-format files from the previous version are renamed to *_old.* on first run.
 """
@@ -97,6 +102,9 @@ def blank_stats():
         "version": STATS_VERSION,
         "ops": {op: {"count": 0, "sum": 0.0} for op in OPS},
         "numbers": {op: {} for op in OPS},
+        # timed-session high scores: duration in seconds -> {score, date};
+        # only sessions whose timer ran out count (not stopped early/endless)
+        "best": {},
     }
 
 
@@ -124,6 +132,12 @@ def load_stats():
                 "sum": float(r.get("sum", 0.0)),
                 "ema": None if r.get("ema") is None else float(r["ema"]),
             }
+    for key, rec in data.get("best", {}).items():
+        try:
+            stats["best"][str(int(key))] = {"score": int(rec["score"]),
+                                            "date": str(rec.get("date", ""))}
+        except (TypeError, ValueError, KeyError):
+            continue
     return stats
 
 
@@ -312,6 +326,11 @@ def heat_domain(op):
     return range(2, 101) if op in ("add", "sub") else range(1, 101)
 
 
+def fmt_mmss(seconds):
+    seconds = max(0, int(math.ceil(seconds)))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
 # ==============================================================================
 # Stats window
 # ==============================================================================
@@ -412,9 +431,14 @@ class StatsWindow(ctk.CTkToplevel):
     def refresh(self):
         total = sum(self.stats["ops"][op]["count"] for op in OPS)
         total_t = sum(self.stats["ops"][op]["sum"] for op in OPS)
-        self.overall_label.configure(
-            text=(f"{total} problems solved  ·  {total_t / total:.2f}s average"
-                  if total else "no problems solved yet"))
+        line = (f"{total} problems solved  ·  {total_t / total:.2f}s average"
+                if total else "no problems solved yet")
+        bests = sorted(((int(d), rec) for d, rec in
+                        self.stats["best"].items()), reverse=True)
+        if bests:
+            line += "\nbest score: " + "  ·  ".join(
+                f"{rec['score']} in {fmt_mmss(d)}" for d, rec in bests[:4])
+        self.overall_label.configure(text=line, justify="right")
 
         weights = op_weights(self.stats)
         wsum = sum(weights.values())
@@ -535,6 +559,7 @@ class ZetamacApp(ctk.CTk):
         self.running = False
         self.session_end = None        # monotonic deadline, None = endless
         self.session_start = None
+        self.session_duration = None   # seconds, None = endless
         self.problem = None
         self.problem_start = None
         self.correct_count = 0
@@ -548,6 +573,8 @@ class ZetamacApp(ctk.CTk):
 
         self._build()
         self._show_idle()
+        self.duration_var.trace_add("write", self._update_best_label)
+        self._update_best_label()
 
         self.bind("<Return>", self._on_return)
         self.bind("<Escape>", lambda _e: self.stop() if self.running else None)
@@ -593,6 +620,23 @@ class ZetamacApp(ctk.CTk):
         ctk.CTkLabel(head, text="seconds", font=ctk.CTkFont(FONT, 13),
                      text_color=COL_MUTED).pack(side="right", padx=(0, 6))
 
+        # bottom bar: one stats shortcut per operation
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.pack(side="bottom", fill="x", pady=(0, 20))
+        group = ctk.CTkFrame(bar, fg_color="transparent")
+        group.pack()
+        ctk.CTkLabel(group, text="Stats by operation",
+                     font=ctk.CTkFont(FONT, 13),
+                     text_color=COL_MUTED).pack(side="left", padx=(0, 10))
+        for op in OPS:
+            ctk.CTkButton(group, text=OP_SYMBOLS[op], width=44, height=32,
+                          corner_radius=16,
+                          font=ctk.CTkFont(FONT, 16, "bold"),
+                          fg_color=COL_SURFACE_2, hover_color=COL_BORDER,
+                          text_color=COL_TEXT_2,
+                          command=lambda o=op: self.open_stats(o)).pack(
+                side="left", padx=4)
+
         center = ctk.CTkFrame(self, fg_color="transparent")
         center.pack(fill="both", expand=True)
         inner = ctk.CTkFrame(center, fg_color="transparent")
@@ -622,29 +666,59 @@ class ZetamacApp(ctk.CTk):
                                         text_color=COL_MUTED)
         self.score_label.pack(pady=(18, 0))
 
+        self.best_label = ctk.CTkLabel(inner, text="",
+                                       font=ctk.CTkFont(FONT, 14),
+                                       text_color=COL_MUTED)
+        self.best_label.pack(pady=(4, 0))
+
     # ---- idle / finished screens ----
     def _show_idle(self):
         self.timer_label.configure(text="", text_color=COL_MUTED)
         self.problem_label.configure(text="Ready", text_color=COL_MUTED)
         self.entry.configure(state="disabled", border_color=COL_BORDER)
         self.score_label.configure(
-            text="Press Start (or hit Enter) — answers advance automatically")
+            text="Press Start (or hit Enter) — answers advance automatically",
+            text_color=COL_MUTED)
 
-    def _show_finished(self):
+    def _show_finished(self, new_best=False):
         avg = (self.session_time_sum / self.correct_count
                if self.correct_count else 0.0)
         self.problem_label.configure(text=f"{self.correct_count} solved",
                                      text_color=COL_ACCENT)
-        self.score_label.configure(
-            text=(f"session over  ·  {avg:.2f}s per problem"
-                  if self.correct_count else "session over"))
+        if new_best:
+            self.score_label.configure(
+                text=f"new personal best!  ·  {avg:.2f}s per problem",
+                text_color=COL_ACCENT)
+        else:
+            self.score_label.configure(
+                text=(f"session over  ·  {avg:.2f}s per problem"
+                      if self.correct_count else "session over"),
+                text_color=COL_MUTED)
         self.timer_label.configure(text="0:00" if self.session_end else "",
                                    text_color=COL_MUTED)
+
+    def _update_best_label(self, *_):
+        """Show the high score for the currently selected session length."""
+        if self.endless_var.get():
+            self.best_label.configure(text="endless mode  ·  no high score")
+            return
+        try:
+            dur = max(5, int(round(float(self.duration_var.get()))))
+        except ValueError:
+            dur = DEFAULT_DURATION
+        rec = self.stats["best"].get(str(dur))
+        if rec:
+            when = f"  ·  {rec['date']}" if rec.get("date") else ""
+            text = f"best {fmt_mmss(dur)} score: {rec['score']}{when}"
+        else:
+            text = f"best {fmt_mmss(dur)} score: —"
+        self.best_label.configure(text=text)
 
     # ---- session control ----
     def _on_endless_toggle(self):
         state = "disabled" if self.endless_var.get() else "normal"
         self.duration_entry.configure(state=state)
+        self._update_best_label()
 
     def _on_return(self, _event):
         if not self.running:
@@ -657,6 +731,7 @@ class ZetamacApp(ctk.CTk):
         self.session_start = time.monotonic()
         if self.endless_var.get():
             self.session_end = None
+            self.session_duration = None
         else:
             try:
                 dur = max(5.0, float(self.duration_var.get()))
@@ -664,26 +739,38 @@ class ZetamacApp(ctk.CTk):
                 dur = float(DEFAULT_DURATION)
                 self.duration_var.set(str(DEFAULT_DURATION))
             self.session_end = self.session_start + dur
+            self.session_duration = dur
         self.start_btn.configure(text="Stop", fg_color=COL_SURFACE_2,
                                  hover_color=COL_BORDER,
                                  text_color=COL_TEXT_2, command=self.stop)
         self.entry.configure(state="normal", border_color=COL_ACCENT)
-        self.score_label.configure(text="0 solved")
+        self.score_label.configure(text="0 solved", text_color=COL_MUTED)
         self._next_problem()
         self._tick()
 
-    def stop(self):
+    def stop(self, natural=False):
         self.running = False
         if self._tick_job is not None:
             self.after_cancel(self._tick_job)
             self._tick_job = None
+        # a high score requires a full timed session, not an early stop
+        new_best = False
+        if natural and self.session_duration is not None \
+                and self.correct_count > 0:
+            key = str(int(round(self.session_duration)))
+            rec = self.stats["best"].get(key)
+            if rec is None or self.correct_count > rec["score"]:
+                self.stats["best"][key] = {"score": self.correct_count,
+                                           "date": time.strftime("%Y-%m-%d")}
+                new_best = True
         save_stats(self.stats)
         self.start_btn.configure(text="Start", fg_color=COL_ACCENT,
                                  hover_color=COL_ACCENT_2,
                                  text_color=COL_TEXT, command=self.start)
         self.answer_var.set("")
         self.entry.configure(state="disabled", border_color=COL_BORDER)
-        self._show_finished()
+        self._show_finished(new_best)
+        self._update_best_label()
         self._refresh_stats_window()
 
     # ---- problem flow ----
@@ -730,30 +817,26 @@ class ZetamacApp(ctk.CTk):
         if self.session_end is not None:
             remaining = self.session_end - now
             if remaining <= 0:
-                self.stop()
+                self.stop(natural=True)
                 return
             color = COL_CRITICAL if remaining <= 10 else COL_TEXT_2
-            self.timer_label.configure(text=self._fmt(remaining),
+            self.timer_label.configure(text=fmt_mmss(remaining),
                                        text_color=color)
         else:
             self.timer_label.configure(
-                text=f"∞  {self._fmt(now - self.session_start)}",
+                text=f"∞  {fmt_mmss(now - self.session_start)}",
                 text_color=COL_TEXT_2)
         self._tick_job = self.after(100, self._tick)
 
-    @staticmethod
-    def _fmt(seconds):
-        seconds = max(0, int(math.ceil(seconds)))
-        return f"{seconds // 60}:{seconds % 60:02d}"
-
     # ---- stats window ----
-    def open_stats(self):
-        if self.stats_window is not None and self.stats_window.winfo_exists():
-            self.stats_window.refresh()
-            self.stats_window.focus()
-            self.stats_window.lift()
-            return
-        self.stats_window = StatsWindow(self, self.stats)
+    def open_stats(self, op=None):
+        if self.stats_window is None or not self.stats_window.winfo_exists():
+            self.stats_window = StatsWindow(self, self.stats)
+        if op is not None:
+            self.stats_window.op_picker.set(OP_LABELS[op])
+        self.stats_window.refresh()
+        self.stats_window.focus()
+        self.stats_window.lift()
 
     def _refresh_stats_window(self):
         if self.stats_window is not None and self.stats_window.winfo_exists():
