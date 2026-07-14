@@ -48,6 +48,7 @@ import json
 import math
 import os
 import random
+import sys
 import time
 from dataclasses import dataclass
 
@@ -55,9 +56,16 @@ import tkinter as tk
 import customtkinter as ctk
 
 # --- files -------------------------------------------------------------------
-HERE = os.path.dirname(os.path.abspath(__file__))
+# When frozen by PyInstaller, keep data files next to the .exe instead of the
+# one-shot temp extraction folder (which vanishes after every run).
+if getattr(sys, "frozen", False):
+    HERE = os.path.dirname(sys.executable)
+else:
+    HERE = os.path.dirname(os.path.abspath(__file__))
 STATS_FILE = os.path.join(HERE, "zetamac_stats.json")
 LOG_FILE = os.path.join(HERE, "zetamac_log.csv")
+# bundled read-only assets land in sys._MEIPASS in a frozen build
+ICON_FILE = os.path.join(getattr(sys, "_MEIPASS", HERE), "icon.ico")
 
 STATS_VERSION = 2
 LOG_HEADER = ["timestamp", "operation", "left", "right", "answer", "seconds"]
@@ -342,6 +350,11 @@ class StatsWindow(ctk.CTkToplevel):
         self.geometry("1040x780")
         self.minsize(860, 640)
         self._hover_cell = None
+        if os.path.exists(ICON_FILE):
+            # delayed: CTkToplevel re-applies its default icon shortly after
+            # creation, which would overwrite an immediate iconbitmap call
+            self.after(350, lambda: self.winfo_exists()
+                       and self.iconbitmap(ICON_FILE))
 
         pad = {"padx": 24}
 
@@ -570,6 +583,8 @@ class ZetamacApp(ctk.CTk):
         self.title("Zetamac Trainer")
         self.geometry("900x640")
         self.minsize(760, 560)
+        if os.path.exists(ICON_FILE):
+            self.iconbitmap(ICON_FILE)
 
         self._build()
         self._show_idle()

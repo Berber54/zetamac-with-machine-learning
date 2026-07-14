@@ -15,6 +15,21 @@ python zetamac.py
 The only dependency is [CustomTkinter](https://customtkinter.tomschimansky.com/)
 (pulls in `darkdetect`). Python 3.10+.
 
+## Build a standalone .exe
+
+Double-click **`build.bat`** (or run it from a terminal). It installs
+PyInstaller, bundles the app with `icon.ico` as the executable and window
+icon, and produces a single self-contained file at:
+
+```
+dist\ZetamacTrainer.exe
+```
+
+The .exe can be copied anywhere and run without Python installed;
+`zetamac_stats.json` and `zetamac_log.csv` are created **next to the .exe**.
+(The first launch takes a few seconds while the bundle unpacks, and an
+unsigned executable may need a one-time "Run anyway" past Windows SmartScreen.)
+
 ## How to play
 
 - Set a session length in seconds (default 120) or flip on **Endless**, then
