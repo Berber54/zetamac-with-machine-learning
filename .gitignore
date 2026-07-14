@@ -1,0 +1,3 @@
+zetamac_log*.csv
+zetamac_stats*.json
+__pycache__/
