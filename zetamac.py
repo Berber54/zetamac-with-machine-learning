@@ -62,8 +62,32 @@ if getattr(sys, "frozen", False):
     HERE = os.path.dirname(sys.executable)
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
-STATS_FILE = os.path.join(HERE, "zetamac_stats.json")
-LOG_FILE = os.path.join(HERE, "zetamac_log.csv")
+
+
+def _writable(folder):
+    try:
+        probe = os.path.join(folder, ".zetamac_write_probe")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("x")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+# If the app's folder can't be written (C:\ root, Program Files, a zip view…)
+# fall back to %LOCALAPPDATA%\ZetamacTrainer so progress still persists.
+DATA_DIR = HERE
+if not _writable(DATA_DIR):
+    try:
+        DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", HERE),
+                                "ZetamacTrainer")
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except OSError:
+        DATA_DIR = HERE   # writes will fail; the app degrades gracefully
+
+STATS_FILE = os.path.join(DATA_DIR, "zetamac_stats.json")
+LOG_FILE = os.path.join(DATA_DIR, "zetamac_log.csv")
 # bundled read-only assets land in sys._MEIPASS in a frozen build
 ICON_FILE = os.path.join(getattr(sys, "_MEIPASS", HERE), "icon.ico")
 
@@ -579,6 +603,7 @@ class ZetamacApp(ctk.CTk):
         self.session_time_sum = 0.0
         self.stats_window = None
         self._tick_job = None
+        self._write_warned = False
 
         self.title("Zetamac Trainer")
         self.geometry("900x640")
@@ -778,7 +803,7 @@ class ZetamacApp(ctk.CTk):
                 self.stats["best"][key] = {"score": self.correct_count,
                                            "date": time.strftime("%Y-%m-%d")}
                 new_best = True
-        save_stats(self.stats)
+        self._persist()
         self.start_btn.configure(text="Start", fg_color=COL_ACCENT,
                                  hover_color=COL_ACCENT_2,
                                  text_color=COL_TEXT, command=self.start)
@@ -812,11 +837,22 @@ class ZetamacApp(ctk.CTk):
         if val == self.problem.answer:
             self._accept()
 
+    def _persist(self, elapsed=None):
+        """Write stats/log; a failure must never interrupt the game."""
+        try:
+            if elapsed is not None:
+                log_solve(self.problem, elapsed)
+            save_stats(self.stats)
+        except OSError:
+            if not self._write_warned:
+                self._write_warned = True
+                self.title("Zetamac Trainer — can't save progress "
+                           "(folder not writable)")
+
     def _accept(self):
         elapsed = time.monotonic() - self.problem_start
         record_solve(self.stats, self.problem, elapsed)
-        log_solve(self.problem, elapsed)
-        save_stats(self.stats)
+        self._persist(elapsed)
         self.correct_count += 1
         self.session_time_sum += elapsed
         self.score_label.configure(
@@ -858,8 +894,15 @@ class ZetamacApp(ctk.CTk):
             self.stats_window.refresh()
 
     def _on_close(self):
-        save_stats(self.stats)
-        self.destroy()
+        """The X button must always close the app — saving is best-effort."""
+        try:
+            save_stats(self.stats)
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            os._exit(0)   # last resort: never leave a window that won't close
 
 
 def main():

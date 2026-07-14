@@ -1,6 +1,5 @@
-zetamac_log*.csv
-zetamac_stats*.json
+zetamac_log.csv
+zetamac_stats.json
 __pycache__/
 build/
 dist/
-*.spec

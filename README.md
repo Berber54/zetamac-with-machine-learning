@@ -27,6 +27,9 @@ dist\ZetamacTrainer.exe
 
 The .exe can be copied anywhere and run without Python installed;
 `zetamac_stats.json` and `zetamac_log.csv` are created **next to the .exe**.
+If the .exe sits somewhere Windows won't let programs write (the root of
+`C:\`, Program Files, inside a zip), the data files go to
+`%LOCALAPPDATA%\ZetamacTrainer` instead.
 (The first launch takes a few seconds while the bundle unpacks, and an
 unsigned executable may need a one-time "Run anyway" past Windows SmartScreen.)
 
